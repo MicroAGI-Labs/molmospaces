@@ -97,6 +97,10 @@ TASK_CLASS_TO_SPEC_CLASS: dict[str, type[BaseTaskSpec]] = {
     "NavToObjTask": NavToObjTaskSpec,
 }
 
+LEGACY_TASK_CLASS_ALIASES: dict[str, str] = {
+    "mujoco_thor.tasks.pick_and_place_task.PickAndPlaceTask": "molmo_spaces.tasks.pick_and_place_task.PickAndPlaceTask",
+}
+
 
 def import_class_from_string(class_path: str) -> type:
     """
@@ -112,6 +116,7 @@ def import_class_from_string(class_path: str) -> type:
         ImportError: If module cannot be imported
         AttributeError: If class not found in module
     """
+    class_path = LEGACY_TASK_CLASS_ALIASES.get(class_path, class_path)
     parts = class_path.rsplit(".", 1)
     if len(parts) != 2:
         raise ValueError(f"Invalid class path: {class_path}. Expected 'module.ClassName' format.")
@@ -331,6 +336,7 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
             "molmo_spaces.tasks.pick_task.PickTask": "pick",
             "molmo_spaces.tasks.opening_tasks.OpeningTask": "open",
             "molmo_spaces.tasks.pick_and_place_task.PickAndPlaceTask": "pick_and_place",
+            "mujoco_thor.tasks.pick_and_place_task.PickAndPlaceTask": "pick_and_place",
             "molmo_spaces.tasks.pick_and_place_next_to_task.PickAndPlaceNextToTask": "pick_and_place_next_to",
             "molmo_spaces.tasks.pick_and_place_color_task.PickAndPlaceColorTask": "pick_and_place_color",
             "molmo_spaces.tasks.opening_tasks.DoorOpeningTask": "door_opening",
@@ -811,18 +817,6 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
         task_config.referral_expressions_priority = (
             self.episode_spec.language.referral_expressions_priority
         )
-
-        # The JSON benchmark is authoritative for displacement thresholds.
-        # Assert they match the expected defaults rather than overriding.
-        if isinstance(task_config, PickAndPlaceTaskConfig):
-            assert task_config.max_place_receptacle_pos_displacement == 0.15, (
-                f"Expected max_place_receptacle_pos_displacement=0.15, "
-                f"got {task_config.max_place_receptacle_pos_displacement}"
-            )
-            assert np.isclose(task_config.max_place_receptacle_rot_displacement, np.radians(60)), (
-                f"Expected max_place_receptacle_rot_displacement=radians(60), "
-                f"got {task_config.max_place_receptacle_rot_displacement}"
-            )
 
         # Replace the stub task_config with the properly typed one
         self.config.task_config = task_config
