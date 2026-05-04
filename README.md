@@ -30,8 +30,8 @@
 ### Updates
 - **[2026/03/24]** 🔥 [**MolmoBot-Datagen**](https://allenai.org/blog/molmobot-robot-manipulation) Code for scripted planners, data generation, and benchmark creation.
 - **[2026/02/27]** 🔥 [**Leaderboards**](https://molmospaces.allen.ai/leaderboard) are out.
-- **[2026/02/11]** 🔥 [**Datasets**](https://github.com/allenai/mujoco-thor/blob/main/assets/README.md) for assets and scenes in MJCF and USDa format.
-- **[2026/02/11]** 🔥 [**Benchmark**](https://github.com/allenai/mujoco-thor/blob/main/molmo_spaces/evaluation/README.md) for 8 tasks, including *pick*, *open*, and *close* tasks in JSONs.
+- **[2026/02/11]** 🔥 [**Datasets**](https://github.com/allenai/molmospaces/blob/main/docs/assets.md#assets-and-resource-manager) for assets and scenes in MJCF and USDa format.
+- **[2026/02/11]** 🔥 [**Benchmark**](https://github.com/allenai/molmospaces/blob/main/molmo_spaces/evaluation/README.md) for 8 tasks, including *pick*, *open*, and *close* tasks in JSONs.
 - **[2026/02/11]** 🔥 **MolmoSpaces** Code for scene conversion, grasp generation, teleoperation, and benchmark evaluation.
 
 
@@ -39,24 +39,34 @@
 
 Installing `molmospaces` is easy!
 
-First, set up a conda environment with Python 3.11:
-
-```bash
-conda create -n mlspaces python=3.11
-conda activate mlspaces
-```
-
-
-Then, clone and install the project:
+First, clone the project. 
 
 ```bash
 git clone git@github.com:allenai/molmospaces.git
 cd molmospaces
 ```
 
+Then, set up the virtual environment and install.
+
+> Note: If you want to use the debug viewer on macOS you need to use conda or a Homebrew Python. This is because `mjpython` used by the debug viewer requires a shared `libpython3.11.dylib`, which `uv`'s standalone CPython does not ship.
+
+
+With conda:
+
 ```bash
+conda create -n mlspaces python=3.11
+conda activate mlspaces
 pip install -e ".[mujoco]"
 ```
+
+Or with `uv`:
+
+```bash
+uv venv --python 3.11 .venv
+source .venv/bin/activate
+uv pip install -e ".[mujoco]"
+```
+
 One of the following options must be provided:
 - `mujoco` to use the classic MuJoCo renderer
 - `mujoco-filament` to use the improved Filament renderer for MuJoCo
@@ -116,14 +126,14 @@ Environment variables beginning with the `MLSPACES` prefix can be used to custom
 
 | Environment Variable | Effect | Default |
 |---|---|---|
-| `MLSPACES_ASSETS_DIR` | Where to place downloaded assets | `../assets` relative to `molmo-spaces` directory |
+| `MLSPACES_ASSETS_DIR` | Where to place downloaded assets | `~/.cache/molmospaces/assets/<install-hash>` |
 | `MLSPACES_FORCE_INSTALL` | Override existing assets | `True` |
 | `MLSPACES_PINNED_ASSETS_FILE` | A `.json` file containing pinned versions for each asset, used to override the versions specified in [molmo_spaces_constants.py](molmo_spaces/molmo_spaces_constants.py). |  |
 
 
 ### Quick Test
 
-Run a quick sample of data generation. For machines with a display use the `--viewer` option to launching the passive viewer (push "w" for wire-frame view to see the robot more easily, more details [here](#mujoco-viewer-tips)). Assets should be downloaded automatically for all runs.
+Run a quick sample of data generation. For machines with a display use the `--viewer` option to launching the passive debug viewer (push "w" for wire-frame view to see the robot more easily, more details [here](#mujoco-viewer-tips)). Assets should be downloaded automatically for all runs.
 
 ```bash
 # Linux
@@ -311,14 +321,16 @@ The xml files have been modified from the original versions provided by the foll
 - [mujoco_menagerie / robotiq_2f85_v4](https://github.com/google-deepmind/mujoco_menagerie/tree/main/robotiq_2f85_v4) - Copyright (c) 2013, ROS-Industrial
 - [Rainbow Robotics / rby1-sdk](https://github.com/RainbowRobotics/rby1-sdk) - Copyright 2024-2025 Rainbow Robotics
 - [RUM Gripper](https://github.com/jeffacce/cap-policy) - Copyright (c) 2026 NYU Generalizable Robotics and AI Lab (GRAIL)
+- [I2RT Robotics / i2rt Python API](https://github.com/i2rt-robotics/i2rt) - Copyright (c) I2RT Robotics
 
 ## Citing
 
 ```
-@misc{molmospaces2026,
-    title={MolmoSpaces: A Large-Scale Open Ecosystem for Robot Navigation and Manipulation},
-    author={Yejin Kim and Wilbert Pumacay and Omar Rayyan and Max Argus and Winson Han and Eli VanderBilt and Jordi Salvador and Abhay Deshpande and Rose Hendrix and Snehal Jauhri and Shuo Liu and Nur Muhammad Mahi Shafiullah and Maya Guru and Arjun Guru and Ainaz Eftekhar and Karen Farley and Donovan Clay and Jiafei Duan and Piper Wolters and Alvaro Herrasti and Ying-Chun Lee and Georgia Chalvatzaki and Yuchen Cui and Ali Farhadi and Dieter Fox and Ranjay Krishna},
-    year={2026},
+@article{kim2026molmospaces,
+  title={MolmoSpaces: A Large-Scale Open Ecosystem for Robot Navigation and Manipulation},
+  author={Kim, Yejin and Pumacay, Wilbert and Rayyan, Omar and Argus, Max and Han, Winson and VanderBilt, Eli and Salvador, Jordi and Deshpande, Abhay and Hendrix, Rose and Jauhri, Snehal and others},
+  journal={arXiv preprint arXiv:2602.11337},
+  year={2026}
 }
 
 @misc{deshpande2026molmobot,

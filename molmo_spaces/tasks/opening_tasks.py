@@ -89,8 +89,6 @@ class OpeningTask(PickTask):
         """
         rewards_envs = np.zeros(self._env.n_batch)
 
-        self.config.task_type = "open"
-
         if self.config.task_type == "open":
             for n in range(self._env.n_batch):
                 reward_cand = []
@@ -585,7 +583,6 @@ class DoorOpeningTask(BaseMujocoTask):
     ) -> tuple:
         """
         Compute an ee pose from a handle pose.
-        Adapted from https://github.com/allenai/mujoco-thor/blob/thor-assets/scripts/calibration/ithor_artiuclate_test.py#L552
         Also return the offset distance to be added to the ee pose to be at the edge of the handle (using the handle bbox).
         """
         # Assumption: VISUAL GEOM Z Axis is usually along the handle (front to back). X-axis is up/right. Y is left/up.

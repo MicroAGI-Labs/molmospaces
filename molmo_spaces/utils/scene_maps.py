@@ -9,16 +9,30 @@ import cv2
 import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
-from mujoco import MjData
+from mujoco import MjData, MjModel
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 from molmo_spaces.env.mj_extensions import MjModelBindings
+from molmo_spaces.renderer.filament_rendering import MjFilamentRenderer
 from molmo_spaces.renderer.opengl_rendering import MjOpenGLRenderer
 from molmo_spaces.utils.linalg_utils import homogenize, inverse_homogeneous_matrix, single_or_batch
 from molmo_spaces.utils.mj_model_and_data_utils import geom_aabb
 
 log = logging.getLogger(__name__)
+
+
+def _get_renderer(
+    model: MjModel, width: int, height: int, device_id: int, use_filament: bool = False
+) -> MjOpenGLRenderer | MjFilamentRenderer:
+    renderer: MjOpenGLRenderer | MjFilamentRenderer | None = None
+    if use_filament:
+        renderer = MjFilamentRenderer(MjModelBindings(model), height=height, width=width)
+    else:
+        renderer = MjOpenGLRenderer(
+            MjModelBindings(model), height=height, width=width, device_id=device_id
+        )
+    return renderer
 
 
 def _delete_blacklisted_bodies(spec: mujoco.MjSpec) -> int:
@@ -133,6 +147,7 @@ class THORMap:
         voxel_map=None,
         voxel_scale_factor=None,
         px_per_m: int = 100,
+        use_filament: bool = False,
     ):
         self._occupancy_map = occupancy_map
         self._occupancy_scale_factor = occupancy_scale_factor
@@ -140,6 +155,7 @@ class THORMap:
         self._voxel_map = voxel_map
         self._voxel_scale_factor = voxel_scale_factor
         self._px_per_m = px_per_m
+        self._use_filament = use_filament
 
     @property
     def occupancy_map(self):
@@ -294,8 +310,9 @@ class ProcTHORMap(THORMap):
         px_per_m: int,
         room_map: np.ndarray = None,
         room_ids_to_name: dict = None,
+        use_filament: bool = False,
     ):
-        super().__init__(occupancy_map=occupancy, px_per_m=px_per_m)
+        super().__init__(occupancy_map=occupancy, px_per_m=px_per_m, use_filament=use_filament)
         self.occupancy = occupancy
         self._room_map = room_map
         self.room_ids_to_name = room_ids_to_name
@@ -376,7 +393,7 @@ class ProcTHORMap(THORMap):
         return self._px_per_m
 
     @classmethod
-    def load(cls, path: str):
+    def load(cls, path: str, agent_radius: float | None = None):
         if path.endswith(".png"):
             # stacked images
             all_img = Image.open(path)
@@ -391,6 +408,15 @@ class ProcTHORMap(THORMap):
             room_ids_to_name = {int(k): v for k, v in room_ids_to_name.items()}
             occupancy = np.array(img) > 0
             room_map = np.array(room_map)
+
+            if agent_radius is not None:
+                occupancy = ~occupancy
+                rad_px = int(agent_radius * px_per_m)
+                kernel = circular_kernel(rad_px)
+                occupancy = cv2.dilate(occupancy.astype(np.uint8), kernel).astype(bool)
+                room_map[occupancy] = 0
+                occupancy = ~occupancy
+
             return cls(
                 occupancy=occupancy,
                 room_map=room_map,
@@ -401,9 +427,25 @@ class ProcTHORMap(THORMap):
             )
         elif path.endswith(".npz"):
             data = np.load(path)
+
+            world_to_map = data["world_to_map"]
+            map_to_world = data["map_to_world"]
+            px_per_m = data["px_per_m"]
+            room_ids_to_name = data["room_ids_to_name"]
+            occupancy = data["occupancy"]
+            room_map = data["occupancy"]
+
+            if agent_radius is not None:
+                occupancy = ~occupancy
+                rad_px = int(agent_radius * px_per_m)
+                kernel = circular_kernel(rad_px)
+                occupancy = cv2.dilate(occupancy.astype(np.uint8), kernel).astype(bool)
+                room_map[occupancy] = 0
+                occupancy = ~occupancy
+
             return cls(
-                occupancy=data["occupancy"],
-                room_map=data["room_map"],
+                occupancy=occupancy,
+                room_map=room_map,
                 room_ids_to_name=data["room_ids_to_name"],
                 world_to_map=data["world_to_map"],
                 map_to_world=data["map_to_world"],
@@ -411,6 +453,26 @@ class ProcTHORMap(THORMap):
             )
         else:
             raise ValueError(f"Unsupported file format: {path}")
+
+    @staticmethod
+    def safe_model_data(spec, data=None):
+        # Delete bodies that match blacklisted asset UIDs (prevents compile errors)
+        _delete_blacklisted_bodies(spec)
+
+        # Create new model and data
+        try:
+            model = spec.compile()
+        except ValueError as e:
+            _handle_compile_error_and_blacklist(e)
+            raise
+        finally:
+            del spec  # Explicitly free the spec
+
+        if data is None:
+            data = mujoco.MjData(model)
+            mujoco.mj_forward(model, data)
+
+        return model, data
 
     @classmethod
     def from_mj_model_path(
@@ -421,6 +483,7 @@ class ProcTHORMap(THORMap):
         px_per_m: int = 100,
         data: MjData | None = None,
         device_id: int = None,
+        use_filament: bool = False,
     ):
         """
         Generate a ProcTHORMap from a MuJoCo model with the open door path cleared.
@@ -463,20 +526,7 @@ class ProcTHORMap(THORMap):
             log.debug(f"[ProcTHORMap] Deleting ceiling geom: {geom.name}")
             spec.delete(geom)  # for mujoco>3.3.5
 
-        # Delete bodies that match blacklisted asset UIDs (prevents compile errors)
-        _delete_blacklisted_bodies(spec)
-
-        try:
-            model: mujoco.MjModel = spec.compile()
-        except ValueError as e:
-            _handle_compile_error_and_blacklist(e)
-            raise
-        finally:
-            del spec  # Explicitly free the spec object
-
-        if data is None:
-            data = MjData(model)
-            mujoco.mj_forward(model, data)
+        model, data = cls.safe_model_data(spec, data)
 
         # Identify floor geom indices
         floor_ids = []
@@ -505,7 +555,9 @@ class ProcTHORMap(THORMap):
             root_body_id = root_body.id
             root_body_name = root_body.name
             if root_body_name and (
-                root_body_name.startswith("door_") or root_body_name.startswith("doorway_")
+                root_body_name.startswith("door_")
+                or root_body_name.startswith("doorway_")
+                or root_body_name.startswith("doorframe_")
             ):
                 if root_body_id not in parent_to_child:
                     parent_to_child[root_body_id] = []
@@ -564,8 +616,8 @@ class ProcTHORMap(THORMap):
             w = round(px_per_m * aabb_size[1])
             effective_px = h / aabb_size[0]
 
-            renderer = MjOpenGLRenderer(
-                MjModelBindings(model), height=h, width=w, device_id=device_id
+            renderer = _get_renderer(
+                model, width=w, height=h, device_id=device_id, use_filament=use_filament
             )
             renderer.update(data, cam)
             for camera in renderer.scene.camera:
@@ -814,32 +866,68 @@ class iTHORMap(ProcTHORMap):
         px_per_m: int = 100,
         data: MjData | None = None,
         device_id: int = None,
+        use_filament: bool = False,
     ):
-        # Create a new model without ceiling bodies
+        # We make two passes of spec/model loading:
+        #  1. determine which objects are more than 1.5m above the floor
+        #  2. compute the occupancy map with high objects removed
+
+        # Pass 1.
+        spec = mujoco.MjSpec.from_file(model_path)
+        model, data = cls.safe_model_data(spec)
+
+        # Find floor geoms
+        floor_ids = []
+        for geom_id in range(model.ngeom):
+            geom_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
+            if geom_name and "floor" in geom_name.lower():
+                if model.geom(geom_id).contype == 0:  # is "__VISUAL_MJT__":
+                    floor_ids.append(geom_id)
+        assert len(floor_ids) > 0, "No floors found in the model"
+
+        # Compute top of floor and height threshold (1.5m above floor)
+        aabb_center, aabb_size = geom_aabb(model, data, floor_ids, tight_mesh=False)
+        z_threshold = 1.5 + (aabb_center[2] + aabb_size[2] / 2)  # floor top + 1.5
+
+        # Find top-level body names
+        high_names = set()
+        low_names = set()
+        for geom_id in range(model.ngeom):
+            aabb_center, aabb_size = geom_aabb(model, data, [geom_id], tight_mesh=False)
+            if model.geom(geom_id).contype == 0:  # is "__VISUAL_MJT__":
+                min_z = aabb_center[2] - aabb_size[2] / 2
+                body_id = model.geom_bodyid[geom_id]
+                body_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
+
+                # Get top-level body name
+                parts = body_name.split("_")
+                parts[-2] = "0"
+                body_name = "_".join(parts)
+
+                if min_z > z_threshold:
+                    high_names.add(body_name)
+                else:
+                    low_names.add(body_name)
+
+        # If any low-level body is low, the top-level one cannot be considered high
+        high_names -= low_names
+
+        del data, model
+
+        # Pass 2.
         spec = mujoco.MjSpec.from_file(model_path)
 
-        # Collect bodies to delete first
+        # Delete high bodies
         for body in spec.worldbody.bodies:
             body_name = body.name
             if body_name and "ceiling" in body_name.lower():
                 spec.delete(body)
             elif body_name and "light" in body_name.lower():
                 spec.delete(body)
+            elif body_name in high_names:
+                spec.delete(body)
 
-        # Delete bodies that match blacklisted asset UIDs (prevents compile errors)
-        _delete_blacklisted_bodies(spec)
-
-        # Create new model and data
-        try:
-            model = spec.compile()
-        except ValueError as e:
-            _handle_compile_error_and_blacklist(e)
-            raise
-        finally:
-            del spec  # Explicitly free the spec
-
-        data = mujoco.MjData(model)
-        mujoco.mj_forward(model, data)
+        model, data = cls.safe_model_data(spec)
 
         floor_ids = []
         for geom_id in range(model.ngeom):
@@ -861,8 +949,8 @@ class iTHORMap(ProcTHORMap):
             cam.orthographic = 1
             h, w = round(px_per_m * aabb_size[0]), round(px_per_m * aabb_size[1])
             px_per_m = h / aabb_size[0]  # recompute to account for rounding
-            renderer = MjOpenGLRenderer(
-                MjModelBindings(model), height=h, width=w, device_id=device_id
+            renderer = _get_renderer(
+                model, width=w, height=h, device_id=device_id, use_filament=use_filament
             )
             renderer.update(data, cam)
             for camera in renderer.scene.camera:
@@ -875,8 +963,8 @@ class iTHORMap(ProcTHORMap):
             assert model.cam_orthographic[cam_model.id], "Camera must be orthographic"
             w, h = model.cam_resolution[cam_model.id]
             px_per_m = h / cam_model.fovy.item()
-            renderer = MjOpenGLRenderer(
-                MjModelBindings(model), height=h, width=w, device_id=device_id
+            renderer = _get_renderer(
+                model, width=w, height=h, device_id=device_id, use_filament=use_filament
             )
             renderer.update(data, camera)
 
@@ -978,7 +1066,7 @@ class iTHORMap(ProcTHORMap):
         return self._px_per_m
 
     @classmethod
-    def load(cls, path: str):
+    def load(cls, path: str, agent_radius: float | None = None):
         if path.endswith(".png"):
             # stacked images
             img = Image.open(path)
@@ -988,6 +1076,14 @@ class iTHORMap(ProcTHORMap):
             map_to_world = np.array(json.loads(img.info["map_to_world"]))
             px_per_m = int(np.ceil(json.loads(img.info["px_per_m"])))
             occupancy = np.array(img) > 0
+
+            if agent_radius is not None:
+                occupancy = ~occupancy
+                rad_px = int(agent_radius * px_per_m)
+                kernel = circular_kernel(rad_px)
+                occupancy = cv2.dilate(occupancy.astype(np.uint8), kernel).astype(bool)
+                occupancy = ~occupancy
+
             return cls(
                 occupancy=occupancy,
                 world_to_map=world_to_map,
@@ -996,8 +1092,15 @@ class iTHORMap(ProcTHORMap):
             )
         elif path.endswith(".npz"):
             data = np.load(path)
+            occupancy = data["occupancy"]
+
+            if agent_radius is not None:
+                rad_px = int(agent_radius * data["px_per_m"])
+                kernel = circular_kernel(rad_px)
+                occupancy = cv2.dilate(occupancy.astype(np.uint8), kernel).astype(bool)
+
             return cls(
-                occupancy=data["occupancy"],
+                occupancy=occupancy,
                 world_to_map=data["world_to_map"],
                 map_to_world=data["map_to_world"],
                 px_per_m=data["px_per_m"],
